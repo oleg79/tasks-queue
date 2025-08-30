@@ -4,27 +4,27 @@ use dotenv::dotenv;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row};
 use sqlx::types::{uuid, Json};
+use fake::{Dummy, Fake, Faker};
+use tokio::time::{sleep, Duration};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Dummy)]
 struct QueueTaskPayload {
     quality: f32,
-    codec: String,
     length: u32,
     title: String,
 }
 
 impl QueueTaskPayload {
-    fn new(quality: f32, codec: &str, length: u32, title: &str) -> Self {
+    fn new(quality: f32, length: u32, title: &str) -> Self {
         QueueTaskPayload {
             quality,
             length,
-            codec: codec.into(),
             title: title.into(),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Dummy)]
 struct QueueTaskDTO {
     topic: String,
     payload: QueueTaskPayload,
@@ -48,26 +48,46 @@ struct QueueTask {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-async fn read_task(pool: &sqlx::PgPool) -> Result<QueueTask, Box<dyn Error>> {
+async fn read_tasks(pool: &sqlx::PgPool) -> Result<Vec<QueueTask>, Box<dyn Error>> {
     let query = sqlx::query_as::<_, QueueTask>("SELECT id, topic, payload, created_at, updated_at FROM tasks");
 
-    let task = query.fetch_one(pool).await?;
+    let tasks = query.fetch_all(pool).await?;
+
+    Ok(tasks)
+}
+
+async fn create_task(task: &QueueTaskDTO, pool: &sqlx::PgPool) -> Result<QueueTask, Box<dyn Error>> {
+    let task = sqlx::query_as::<_, QueueTask>("
+        INSERT INTO tasks (topic, payload) VALUES ($1, $2)
+        RETURNING *;
+    ")
+        .bind(&task.topic)
+        .bind(Json(&task.payload))
+        .fetch_one(pool)
+        .await?;
 
     Ok(task)
 }
 
-async fn create_task(task: &QueueTaskDTO, pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>> {
-    sqlx::query("INSERT INTO tasks (topic, payload) VALUES ($1, $2)")
-        .bind(&task.topic)
-        .bind(Json(&task.payload))
-        .execute(pool)
-        .await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let postgres_url = get_postgres_url()?;
+
+    let pool = sqlx::postgres::PgPool::connect(&postgres_url).await?;
+
+    loop {
+        let queue_task: QueueTaskDTO = Faker.fake();
+
+        let created_task = create_task(&queue_task, &pool).await?;
+        println!("Task({}) created.", created_task.id);
+
+        sleep(Duration::from_millis(2_000)).await;
+    }
 
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn get_postgres_url() -> Result<String, Box<dyn Error>> {
     dotenv().ok();
 
     let user = env::var("POSTGRES_USER")?;
@@ -76,19 +96,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let port = env::var("POSTGRES_PORT")?;
     let db = env::var("POSTGRES_DB")?;
 
-    let postgres_url = format!("postgres://{user}:{pass}@{host}:{port}/{db}",);
+    let postgres_url = format!("postgres://{user}:{pass}@{host}:{port}/{db}");
 
-    let pool = sqlx::postgres::PgPool::connect(&postgres_url).await?;
-
-    let payload = QueueTaskPayload::new(1.0, "RT9000", 4500, "some-video");
-
-    let queue_task = QueueTaskDTO::new("process-video", payload);
-
-    // create_task(&queue_task, &pool).await?;
-
-    let t = read_task(&pool).await?;
-
-    println!("{:#?}", t);
-
-    Ok(())
+    Ok(postgres_url)
 }
