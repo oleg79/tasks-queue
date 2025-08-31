@@ -39,11 +39,21 @@ impl QueueTaskDTO {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "status_enum", rename_all = "lowercase")]
+pub enum QueueTaskStatus {
+    Pending,
+    Processing,
+    Completed,
+    Failed,
+}
+
 #[derive(Debug, FromRow)]
 pub struct QueueTask {
     pub id: uuid::Uuid,
     pub topic: String,
     pub payload: Json<QueueTaskPayload>,
+    pub status: QueueTaskStatus,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -74,7 +84,7 @@ pub async fn create_task(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>> {
         .fetch_one(pool)
         .await?;
 
-    println!("Task({}) created.", created_task.id);
+    println!("Task({:#?}) created.", created_task);
 
     Ok(())
 }
