@@ -4,7 +4,7 @@ use std::time::{Duration};
 use rand::{Rng};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::task::JoinSet;
-use common::{get_postgres_pool, read_tasks, uuid, QueueTask};
+use common::{get_postgres_pool, mark_tasks_as, read_tasks, uuid, QueueTask, QueueTaskStatus};
 
 
 #[tokio::main]
@@ -26,25 +26,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 set.shutdown().await;
                 break
             }
-            tasks = read_tasks(&pool, 10) => {
+            tasks = read_tasks(&pool, 4) => {
                 for task in tasks? {
                     set.spawn(async move {
                         process_task(&task)
                     });
                 }
 
-                let mut succeeded_task_ids = vec![];
+                let mut completed_task_ids = vec![];
                 let mut failed_task_ids = vec![];
 
                 for processed_task_id in set.join_all().await {
                     match processed_task_id {
-                        Ok(task_id) => succeeded_task_ids.push(task_id),
+                        Ok(task_id) => completed_task_ids.push(task_id),
                         Err(task_id) => failed_task_ids.push(task_id),
                     }
                 }
 
-                println!("Succeeded tasks: {:#?}", succeeded_task_ids);
-                println!("Fail tasks: {:#?}", failed_task_ids);
+                mark_tasks_as(&pool, completed_task_ids, QueueTaskStatus::Completed).await?;
+                mark_tasks_as(&pool, failed_task_ids, QueueTaskStatus::Failed).await?;
             }
         }
     }

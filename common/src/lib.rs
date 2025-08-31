@@ -84,7 +84,7 @@ pub async fn create_task(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>> {
         .fetch_one(pool)
         .await?;
 
-    println!("Task({:#?}) created.", created_task);
+    println!("Task({}) created.", created_task.id);
 
     Ok(())
 }
@@ -110,4 +110,22 @@ pub async fn read_tasks(pool: &sqlx::PgPool, limit: i32) -> Result<Vec<QueueTask
     let tasks = query.bind(limit).fetch_all(pool).await?;
 
     Ok(tasks)
+}
+
+pub async fn mark_tasks_as(pool: &sqlx::PgPool, ids: Vec<uuid::Uuid>, status: QueueTaskStatus) -> Result<(), Box<dyn Error>> {
+    println!("Tasks({:?}): {:#?}", status, ids);
+
+    let query = sqlx::query("
+            UPDATE tasks
+            SET status = $1,
+                updated_at = now()
+            WHERE id = ANY ($2)
+    ");
+
+    query
+        .bind(status)
+        .bind(ids)
+        .execute(pool).await?;
+
+    Ok(())
 }
