@@ -1,6 +1,5 @@
 use std::error::Error;
 use std::env;
-use dotenv::dotenv;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row};
 use sqlx::types::{uuid, Json};
@@ -88,8 +87,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn get_postgres_url() -> Result<String, Box<dyn Error>> {
-    dotenv().ok();
-
     let user = env::var("POSTGRES_USER")?;
     let pass = env::var("POSTGRES_PASSWORD")?;
     let host = env::var("POSTGRES_HOST")?;
