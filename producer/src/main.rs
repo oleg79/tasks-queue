@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row};
 use sqlx::types::{uuid, Json};
 use fake::{Dummy, Fake, Faker};
-use tokio::time::{sleep, Duration};
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::time::{interval, Duration, MissedTickBehavior};
 
 #[derive(Debug, Serialize, Deserialize, Dummy)]
 struct QueueTaskPayload {
@@ -70,18 +71,29 @@ async fn create_task(task: &QueueTaskDTO, pool: &sqlx::PgPool) -> Result<QueueTa
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let postgres_url = get_postgres_url()?;
+    let mut signal_interrupt = signal(SignalKind::interrupt())?;
+    let mut signal_terminate = signal(SignalKind::terminate())?;
 
+    let mut ticker = interval(Duration::from_secs(2));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    let postgres_url = get_postgres_url()?;
     let pool = sqlx::postgres::PgPool::connect(&postgres_url).await?;
 
     loop {
-        let queue_task: QueueTaskDTO = Faker.fake();
+        tokio::select! {
+            _ = signal_interrupt.recv() => break,
+            _ = signal_terminate.recv() => break,
+            _ = ticker.tick() => {
+                let queue_task: QueueTaskDTO = Faker.fake();
 
-        let created_task = create_task(&queue_task, &pool).await?;
-        println!("Task({}) created.", created_task.id);
-
-        sleep(Duration::from_millis(2_000)).await;
+                let created_task = create_task(&queue_task, &pool).await?;
+                println!("Task({}) created.", created_task.id);
+            }
+        }
     }
+
+    pool.close().await;
 
     Ok(())
 }
