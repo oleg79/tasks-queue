@@ -3,7 +3,9 @@ use std::error::Error;
 use fake::{Dummy, Fake, Faker};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use sqlx::types::{uuid, Json};
+use sqlx::types::Json;
+
+pub use sqlx::types::uuid;
 
 #[derive(Debug, Serialize, Deserialize, Dummy)]
 pub struct QueueTaskPayload {
