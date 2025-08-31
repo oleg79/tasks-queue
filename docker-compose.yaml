@@ -15,5 +15,11 @@ services:
     env_file:
       - .env
 
+  consumer:
+    build:
+      context: ./consumer
+    env_file:
+      - .env
+
 volumes:
   db-data:

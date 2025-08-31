@@ -1,11 +1,12 @@
-use std::error::Error;
 use std::env;
+use std::error::Error;
+use std::time::Duration;
+use fake::Dummy;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Row};
+use sqlx::FromRow;
 use sqlx::types::{uuid, Json};
-use fake::{Dummy, Fake, Faker};
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::time::{interval, Duration, MissedTickBehavior};
+use tokio::time::{interval, MissedTickBehavior};
 
 #[derive(Debug, Serialize, Deserialize, Dummy)]
 struct QueueTaskPayload {
@@ -48,17 +49,27 @@ struct QueueTask {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-async fn create_task(task: &QueueTaskDTO, pool: &sqlx::PgPool) -> Result<QueueTask, Box<dyn Error>> {
-    let task = sqlx::query_as::<_, QueueTask>("
-        INSERT INTO tasks (topic, payload) VALUES ($1, $2)
-        RETURNING *;
-    ")
-        .bind(&task.topic)
-        .bind(Json(&task.payload))
-        .fetch_one(pool)
-        .await?;
+async fn read_tasks(pool: &sqlx::PgPool, limit: i32) -> Result<Vec<QueueTask>, Box<dyn Error>> {
+    let query = sqlx::query_as::<_, QueueTask>("
+        WITH pooled AS (
+          UPDATE tasks t
+          SET status = 'processing',
+              updated_at = now()
+          WHERE id IN (
+            SELECT id
+            FROM tasks
+            WHERE status = 'pending' AND pg_try_advisory_lock(hashtext(id::text))
+            ORDER BY id
+            LIMIT $1
+          )
+          RETURNING t.id, t.topic, t.payload, t.status, t.created_at, t.updated_at
+        )
+        SELECT * FROM pooled;
+    ");
 
-    Ok(task)
+    let tasks = query.bind(limit).fetch_all(pool).await?;
+
+    Ok(tasks)
 }
 
 #[tokio::main]
@@ -66,7 +77,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
     let mut signal_terminate = signal(SignalKind::terminate())?;
 
-    let mut ticker = interval(Duration::from_secs(2));
+    let mut ticker = interval(Duration::from_secs(5));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     let pool = get_postgres_pool().await?;
@@ -76,10 +87,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             _ = signal_interrupt.recv() => break,
             _ = signal_terminate.recv() => break,
             _ = ticker.tick() => {
-                let queue_task: QueueTaskDTO = Faker.fake();
+                let tasks_to_rocess = read_tasks(&pool, 4).await?;
 
-                let created_task = create_task(&queue_task, &pool).await?;
-                println!("Task({}) created.", created_task.id);
+                println!("Fetched tasks: {}", tasks_to_rocess.len());
             }
         }
     }
