@@ -1572,6 +1572,7 @@ name = "tasks-queue-consumer"
 version = "0.1.0"
 dependencies = [
  "common",
+ "rand 0.9.2",
  "tokio",
 ]
 

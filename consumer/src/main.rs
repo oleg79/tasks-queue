@@ -1,27 +1,50 @@
 use std::error::Error;
-use std::time::Duration;
+use std::thread::sleep;
+use std::time::{Duration};
+use rand::{Rng};
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::time::{interval, MissedTickBehavior};
-use common::{get_postgres_pool, read_tasks};
+use tokio::task::JoinSet;
+use common::{get_postgres_pool, read_tasks, uuid, QueueTask};
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
     let mut signal_terminate = signal(SignalKind::terminate())?;
 
-    let mut ticker = interval(Duration::from_secs(5));
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
     let pool = get_postgres_pool().await?;
 
     loop {
-        tokio::select! {
-            _ = signal_interrupt.recv() => break,
-            _ = signal_terminate.recv() => break,
-            _ = ticker.tick() => {
-                let tasks_to_rocess = read_tasks(&pool, 4).await?;
+        let mut set = JoinSet::new();
 
-                println!("Fetched tasks: {}", tasks_to_rocess.len());
+        tokio::select! {
+            _ = signal_interrupt.recv() => {
+                set.shutdown().await;
+                break
+            }
+            _ = signal_terminate.recv() => {
+                set.shutdown().await;
+                break
+            }
+            tasks = read_tasks(&pool, 10) => {
+                for task in tasks? {
+                    set.spawn(async move {
+                        process_task(&task)
+                    });
+                }
+
+                let mut succeeded_task_ids = vec![];
+                let mut failed_task_ids = vec![];
+
+                for processed_task_id in set.join_all().await {
+                    match processed_task_id {
+                        Ok(task_id) => succeeded_task_ids.push(task_id),
+                        Err(task_id) => failed_task_ids.push(task_id),
+                    }
+                }
+
+                println!("Succeeded tasks: {:#?}", succeeded_task_ids);
+                println!("Fail tasks: {:#?}", failed_task_ids);
             }
         }
     }
@@ -29,4 +52,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     pool.close().await;
 
     Ok(())
+}
+
+fn process_task(task: &QueueTask) -> Result<uuid::Uuid, uuid::Uuid> {
+    let mut rng = rand::rng();
+
+    let processing_seconds = rng.random_range(5..=20);
+    sleep(Duration::from_secs(processing_seconds));
+
+    let failure_percentage = rng.random_range(0.0..=1.0);
+
+    if failure_percentage <= 0.3 {
+        return Err(task.id)
+    }
+
+    Ok(task.id)
 }
