@@ -11,13 +11,15 @@ services:
 
   producer:
     build:
-      context: ./producer
+      context: .
+      dockerfile: Dockerfile.producer
     env_file:
       - .env
 
   consumer:
     build:
-      context: ./consumer
+      context: .
+      dockerfile: Dockerfile.consumer
     env_file:
       - .env
 

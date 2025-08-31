@@ -11,13 +11,16 @@ FROM rust:1.88-bookworm as build
 
 WORKDIR /app
 
-COPY . .
+COPY ./consumer ./consumer
+COPY ./common ./common
+
+WORKDIR /app/consumer
 
 #RUN cargo build --relese && upx --best /app/target/release/tasks-queue-consumer
 RUN cargo build
 
 FROM debian:12.6-slim
 
-COPY --from=build /app/target/debug/tasks-queue-consumer /consumer
+COPY --from=build /app/consumer/target/debug/tasks-queue-consumer /consumer
 
 CMD ["/consumer"]
