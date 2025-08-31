@@ -14,29 +14,10 @@ pub struct QueueTaskPayload {
     pub title: String,
 }
 
-impl QueueTaskPayload {
-    fn new(quality: f32, length: u32, title: &str) -> Self {
-        QueueTaskPayload {
-            quality,
-            length,
-            title: title.into(),
-        }
-    }
-}
-
 #[derive(Debug, Dummy)]
 struct QueueTaskDTO {
     topic: String,
     payload: QueueTaskPayload,
-}
-
-impl QueueTaskDTO {
-    fn new(topic: &str, payload: QueueTaskPayload) -> Self {
-        QueueTaskDTO {
-            topic: topic.into(),
-            payload
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::Type)]
