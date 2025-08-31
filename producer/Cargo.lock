@@ -1564,7 +1564,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tasks-queue"
+name = "tasks-queue-producer"
 version = "0.1.0"
 dependencies = [
  "chrono",
