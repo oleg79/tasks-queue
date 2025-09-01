@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         println!("In memory retries map: {:#?}", retries_map);
-        
+
         tokio::select! {
             _ = signal_interrupt.recv() => break,
             _ = signal_terminate.recv() => break,
@@ -58,6 +58,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 
     }
+
+    pool.close().await;
 
     Ok(())
 }
