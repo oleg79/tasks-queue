@@ -121,3 +121,16 @@ pub async fn get_failed_task_ids(pool: &sqlx::PgPool) -> Result<Vec<uuid::Uuid>,
 
     Ok(ids)
 }
+
+pub async fn count_tasks_with_status(pool: &sqlx::PgPool, status: QueueTaskStatus) -> Result<i64, Box<dyn Error>> {
+    let query = sqlx::query_scalar("
+        SELECT COUNT(*) FROM tasks t
+        WHERE t.status = $1
+    ");
+
+    let count = query
+        .bind(status)
+        .fetch_one(pool).await?;
+
+    Ok(count)
+}

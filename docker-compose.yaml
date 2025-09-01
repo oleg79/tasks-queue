@@ -30,5 +30,14 @@ services:
     env_file:
       - .env
 
+  supervisor:
+    build:
+      context: .
+      dockerfile: Dockerfile.supervisor
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   db-data:
