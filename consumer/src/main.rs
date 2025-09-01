@@ -9,18 +9,12 @@ use common::{get_postgres_pool, mark_tasks_as, read_tasks, uuid, QueueTask, Queu
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut no_tasks_to_process_cycles = 5;
-
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
     let mut signal_terminate = signal(SignalKind::terminate())?;
 
     let pool = get_postgres_pool().await?;
 
     loop {
-        if no_tasks_to_process_cycles == 0 {
-            break;
-        }
-
         let mut set = JoinSet::new();
 
         tokio::select! {
@@ -35,25 +29,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             read_tasks_result = read_tasks(&pool, 7) => {
                 let tasks = match read_tasks_result {
                     Ok(tasks) if !tasks.is_empty() => tasks,
-                    _ => {
-                        no_tasks_to_process_cycles -= 1;
-                        let seconds_till_shutdown = 20 - (5 - no_tasks_to_process_cycles) * 4;
-
-                        if seconds_till_shutdown == 0 {
-                            println!("Shutting down...");
-                        } else {
-                            println!(
-                                "No tasks to process. Waiting for {}s before shutting down.",
-                                seconds_till_shutdown
-                            );
-                        }
-
-
-                        tokio::time::sleep(Duration::from_secs(4)).await;
-                        continue;
-                    }
+                    _ => continue,
                 };
-                no_tasks_to_process_cycles = 5;
 
                 for task in tasks {
                     set.spawn(async move {

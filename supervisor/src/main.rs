@@ -4,7 +4,7 @@ use std::ops::{Div};
 use std::time::Duration;
 use bollard::{Docker, API_DEFAULT_VERSION};
 use bollard::models::{ContainerCreateBody, HostConfig, NetworkingConfig};
-use bollard::query_parameters::{CreateContainerOptionsBuilder, InspectContainerOptions, ListContainersOptionsBuilder, StartContainerOptionsBuilder};
+use bollard::query_parameters::{CreateContainerOptionsBuilder, InspectContainerOptions, ListContainersOptionsBuilder, RemoveContainerOptionsBuilder, StartContainerOptionsBuilder, StopContainerOptionsBuilder};
 use nanoid::nanoid;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::time;
@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let hostname = fs::read_to_string("/etc/hostname")?;
 
     let consumer_image_name = "tasks-queue-consumer";
-    let number_of_tasks_per_consumer: i64 = 500;
+    let number_of_tasks_per_consumer: i64 = 200;
     let mut load_check_interval = time::interval(Duration::from_secs(20));
 
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
@@ -54,6 +54,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ..Default::default()
     };
 
+    let mut running_worker_names = vec![];
+
     loop {
         tokio::select! {
             _ = signal_interrupt.recv() => break,
@@ -72,28 +74,63 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .filter(|c| c.image.as_deref() == Some(consumer_image_name))
                     .count();
 
-                println!("needed_consumer_workers_count: {needed_consumer_workers_count}");
-                println!("actual_consumer_workers_count: {actual_consumer_workers_count}");
-                let consumer_workers_to_spawn_count = 0.max(needed_consumer_workers_count - actual_consumer_workers_count);
+                if needed_consumer_workers_count > actual_consumer_workers_count {
+                    let consumer_workers_to_spawn_count = 0.max(needed_consumer_workers_count - actual_consumer_workers_count);
 
-                println!("{} consumer workers required.", consumer_workers_to_spawn_count);
+                    println!("{} consumer workers required.", consumer_workers_to_spawn_count);
 
-                for _ in 0..consumer_workers_to_spawn_count {
-                    let container_id = nanoid!(10);
-                    let container_name = format!("consumer-worker-{}", container_id);
+                    for _ in 0..consumer_workers_to_spawn_count {
+                        let container_id = nanoid!(10);
+                        let container_name = format!("consumer-worker-{}", container_id);
 
-                    let options = CreateContainerOptionsBuilder::default()
-                        .name(container_name.as_str())
-                        .build();
+                        println!("Starting consumer worker({})...", container_name);
 
-                    docker.create_container(
-                        options.into(),
-                        config.clone(),
-                    ).await?;
+                        let options = CreateContainerOptionsBuilder::default()
+                            .name(container_name.as_str())
+                            .build();
 
-                    docker
-                        .start_container(container_name.as_str(), Some(StartContainerOptionsBuilder::default().build()))
-                        .await?;
+                        docker.create_container(
+                            options.into(),
+                            config.clone(),
+                        ).await?;
+
+                        docker
+                            .start_container(container_name.as_str(), Some(StartContainerOptionsBuilder::default().build()))
+                            .await?;
+
+                        println!("Started consumer worker({}).", container_name);
+
+                        running_worker_names.push(container_name);
+                    }
+                } else if needed_consumer_workers_count < actual_consumer_workers_count {
+                    let consumer_workers_to_shut_down = 0.max(actual_consumer_workers_count - needed_consumer_workers_count);
+
+                    for _ in 0..consumer_workers_to_shut_down {
+                        if let Some(container_name) = running_worker_names.pop() {
+                            println!("Shutting down consumer worker({})...", container_name);
+
+                            docker.stop_container(
+                                container_name.as_str(),
+                                Some(StopContainerOptionsBuilder::default().t(4).build()),
+                            ).await?;
+
+                            time::sleep(Duration::from_secs(2)).await;
+
+                            docker.remove_container(
+                                container_name.as_str(),
+                                Some(
+                                    RemoveContainerOptionsBuilder::default()
+                                        .v(true)
+                                        .force(true)
+                                        .build()
+                                ),
+                            ).await?;
+
+                            println!("Shut down consumer worker({}).", container_name);
+                        }
+                    }
+                } else {
+                    continue;
                 }
             }
         }
