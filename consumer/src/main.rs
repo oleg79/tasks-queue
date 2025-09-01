@@ -90,7 +90,7 @@ fn process_task(task: &QueueTask) -> Result<uuid::Uuid, uuid::Uuid> {
 
     let failure_percentage = rng.random_range(0.0..=1.0);
 
-    if failure_percentage <= 0.3 {
+    if failure_percentage <= 0.4 {
         return Err(task.id)
     }
 

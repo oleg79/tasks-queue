@@ -23,5 +23,12 @@ services:
     env_file:
       - .env
 
+  rescheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.rescheduler
+    env_file:
+      - .env
+
 volumes:
   db-data:

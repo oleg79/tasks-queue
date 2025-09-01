@@ -110,3 +110,14 @@ pub async fn mark_tasks_as(pool: &sqlx::PgPool, ids: Vec<uuid::Uuid>, status: Qu
 
     Ok(())
 }
+
+pub async fn get_failed_task_ids(pool: &sqlx::PgPool) -> Result<Vec<uuid::Uuid>, Box<dyn Error>> {
+    let query = sqlx::query_scalar("
+        SELECT t.id FROM tasks t
+        WHERE t.status = 'failed'
+    ");
+
+    let ids = query.fetch_all(pool).await?;
+
+    Ok(ids)
+}
