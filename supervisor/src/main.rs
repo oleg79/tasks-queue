@@ -1,14 +1,19 @@
+use std::{env, fs};
 use std::error::Error;
-use std::ops::Div;
+use std::ops::{Div};
 use std::time::Duration;
 use bollard::{Docker, API_DEFAULT_VERSION};
-use bollard::query_parameters::ListContainersOptionsBuilder;
+use bollard::models::{ContainerCreateBody, HostConfig, NetworkingConfig};
+use bollard::query_parameters::{CreateContainerOptionsBuilder, InspectContainerOptions, ListContainersOptionsBuilder, StartContainerOptionsBuilder};
+use nanoid::nanoid;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::time;
 use common::{count_tasks_with_status, get_postgres_pool, QueueTaskStatus};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let hostname = fs::read_to_string("/etc/hostname")?;
+
     let consumer_image_name = "tasks-queue-consumer";
     let number_of_tasks_per_consumer: i64 = 500;
     let mut load_check_interval = time::interval(Duration::from_secs(20));
@@ -23,6 +28,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
         120,
         API_DEFAULT_VERSION,
     )?;
+
+    let parent_options = docker.inspect_container(hostname.as_str(), None::<InspectContainerOptions>).await?;
+
+    let parent_networks = parent_options.network_settings.ok_or("")?.networks;
+
+    let mut env = vec![];
+
+    for var in ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB"] {
+        env.push(format!("{}={}", var, env::var(var)?))
+    }
+
+    let networking_config = NetworkingConfig { endpoints_config: parent_networks };
+
+    let host_config = HostConfig {
+        network_mode: Some("tasks-queue_default".to_string()),
+        ..Default::default()
+    };
+
+    let config = ContainerCreateBody {
+        image: Some(consumer_image_name.into()),
+        env: Some(env),
+        networking_config: Some(networking_config),
+        host_config: Some(host_config),
+        ..Default::default()
+    };
 
     loop {
         tokio::select! {
@@ -42,9 +72,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .filter(|c| c.image.as_deref() == Some(consumer_image_name))
                     .count();
 
+                println!("needed_consumer_workers_count: {needed_consumer_workers_count}");
+                println!("actual_consumer_workers_count: {actual_consumer_workers_count}");
                 let consumer_workers_to_spawn_count = 0.max(needed_consumer_workers_count - actual_consumer_workers_count);
 
                 println!("{} consumer workers required.", consumer_workers_to_spawn_count);
+
+                for _ in 0..consumer_workers_to_spawn_count {
+                    let container_id = nanoid!(10);
+                    let container_name = format!("consumer-worker-{}", container_id);
+
+                    let options = CreateContainerOptionsBuilder::default()
+                        .name(container_name.as_str())
+                        .build();
+
+                    docker.create_container(
+                        options.into(),
+                        config.clone(),
+                    ).await?;
+
+                    docker
+                        .start_container(container_name.as_str(), Some(StartContainerOptionsBuilder::default().build()))
+                        .await?;
+                }
             }
         }
     }

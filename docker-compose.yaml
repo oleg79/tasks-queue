@@ -16,13 +16,6 @@ services:
     env_file:
       - .env
 
-  consumer:
-    build:
-      context: .
-      dockerfile: Dockerfile.consumer
-    env_file:
-      - .env
-
   rescheduler:
     build:
       context: .
