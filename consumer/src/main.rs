@@ -19,14 +19,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         tokio::select! {
             _ = signal_interrupt.recv() => {
-                set.shutdown().await;
+                set.join_all().await;
                 break;
             }
             _ = signal_terminate.recv() => {
-                set.shutdown().await;
+                set.join_all().await;
                 break;
             }
             read_tasks_result = read_tasks(&pool, 7) => {
+                // TODO: handle tasks release before spawning if consumer shuts down.
                 let tasks = match read_tasks_result {
                     Ok(tasks) if !tasks.is_empty() => tasks,
                     _ => continue,

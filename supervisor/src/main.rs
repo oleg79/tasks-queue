@@ -114,7 +114,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 Some(StopContainerOptionsBuilder::default().t(4).build()),
                             ).await?;
 
-                            time::sleep(Duration::from_secs(2)).await;
+                            let response = docker.inspect_container(container_name.as_str(), None::<InspectContainerOptions>).await?;
+
+                            while let Some(s) = &response.state {
+                                if s.running == Some(false) {
+                                    break;
+                                } else {
+                                    time::sleep(Duration::from_millis(200)).await;
+                                }
+                            }
 
                             docker.remove_container(
                                 container_name.as_str(),
