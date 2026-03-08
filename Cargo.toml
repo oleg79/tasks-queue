@@ -4,14 +4,14 @@ resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1"
-tokio = { version = "1.47", features = ["full"] }
+tokio = { version = "1.50", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "json", "uuid", "chrono"] }
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
 fake = { version = "4.4", features = ["derive"] }
-rand = "0.9"
-bollard = "0.19"
+rand = "0.10"
+bollard = "0.20"
 nanoid = "0.4"
 common = { path = "common" }
