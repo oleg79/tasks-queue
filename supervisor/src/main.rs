@@ -1,6 +1,5 @@
+use anyhow::{Context, Result};
 use std::{env, fs};
-use std::error::Error;
-use std::ops::{Div};
 use std::time::Duration;
 use bollard::{Docker, API_DEFAULT_VERSION};
 use bollard::models::{ContainerCreateBody, HostConfig, NetworkingConfig};
@@ -10,9 +9,85 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::time;
 use common::{count_tasks_with_status, get_postgres_pool, QueueTaskStatus};
 
+const MAX_STOP_WAIT: Duration = Duration::from_secs(30);
+
+async fn start_consumer(docker: &Docker, config: &ContainerCreateBody) -> Result<String> {
+    let container_name = format!("consumer-worker-{}", nanoid!(10));
+
+    tracing::info!(container = %container_name, "Starting consumer worker");
+
+    let options = CreateContainerOptionsBuilder::default()
+        .name(container_name.as_str())
+        .build();
+
+    docker.create_container(options.into(), config.clone())
+        .await
+        .with_context(|| format!("Failed to create container {}", container_name))?;
+
+    docker
+        .start_container(container_name.as_str(), Some(StartContainerOptionsBuilder::default().build()))
+        .await
+        .with_context(|| format!("Failed to start container {}", container_name))?;
+
+    tracing::info!(container = %container_name, "Started consumer worker");
+
+    Ok(container_name)
+}
+
+async fn stop_consumer(docker: &Docker, container_name: &str) -> Result<()> {
+    tracing::info!(container = %container_name, "Shutting down consumer worker");
+
+    docker.stop_container(
+        container_name,
+        Some(StopContainerOptionsBuilder::default().t(4).build()),
+    )
+    .await
+    .with_context(|| format!("Failed to stop container {}", container_name))?;
+
+    let deadline = time::Instant::now() + MAX_STOP_WAIT;
+
+    loop {
+        let running = docker
+            .inspect_container(container_name, None::<InspectContainerOptions>)
+            .await
+            .with_context(|| format!("Failed to inspect container {}", container_name))?
+            .state
+            .and_then(|s| s.running);
+
+        if running == Some(false) {
+            break;
+        }
+
+        if time::Instant::now() >= deadline {
+            tracing::warn!(container = %container_name, "Container did not stop in 30s, forcing removal");
+            break;
+        }
+
+        time::sleep(Duration::from_millis(200)).await;
+    }
+
+    docker.remove_container(
+        container_name,
+        Some(
+            RemoveContainerOptionsBuilder::default()
+                .v(true)
+                .force(true)
+                .build()
+        ),
+    )
+    .await
+    .with_context(|| format!("Failed to remove container {}", container_name))?;
+
+    tracing::info!(container = %container_name, "Shut down consumer worker");
+
+    Ok(())
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let hostname = fs::read_to_string("/etc/hostname")?;
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
+    let hostname = fs::read_to_string("/etc/hostname")?.trim().to_string();
 
     let consumer_image_name = "tasks-queue-consumer";
     let number_of_tasks_per_consumer: i64 = 200;
@@ -27,11 +102,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "/var/run/docker.sock",
         120,
         API_DEFAULT_VERSION,
-    )?;
+    )
+    .context("Failed to connect to Docker daemon")?;
 
-    let parent_options = docker.inspect_container(hostname.as_str(), None::<InspectContainerOptions>).await?;
+    let parent_options = docker
+        .inspect_container(hostname.as_str(), None::<InspectContainerOptions>)
+        .await
+        .with_context(|| format!("Failed to inspect container {}", hostname))?;
 
-    let parent_networks = parent_options.network_settings.ok_or("")?.networks;
+    let parent_networks = parent_options.network_settings.context("missing network_settings")?.networks;
 
     let mut env = vec![];
 
@@ -63,9 +142,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             _ = load_check_interval.tick() => {
                 let pending_tasks_count = count_tasks_with_status(&pool, QueueTaskStatus::Pending).await?;
 
-                let needed_consumer_workers_count = pending_tasks_count.div(number_of_tasks_per_consumer) as usize;
+                let needed_consumer_workers_count = if pending_tasks_count == 0 {
+                    0
+                } else {
+                    ((pending_tasks_count + number_of_tasks_per_consumer - 1) / number_of_tasks_per_consumer) as usize
+                };
 
-                 let all_running_containers = docker
+                let all_running_containers = docker
                     .list_containers(ListContainersOptionsBuilder::default().all(false).build().into())
                     .await?;
 
@@ -75,66 +158,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .count();
 
                 if needed_consumer_workers_count > actual_consumer_workers_count {
-                    let consumer_workers_to_spawn_count = 0.max(needed_consumer_workers_count - actual_consumer_workers_count);
+                    let to_spawn = needed_consumer_workers_count - actual_consumer_workers_count;
+                    tracing::info!(count = to_spawn, "Consumer workers required");
 
-                    println!("{} consumer workers required.", consumer_workers_to_spawn_count);
-
-                    for _ in 0..consumer_workers_to_spawn_count {
-                        let container_id = nanoid!(10);
-                        let container_name = format!("consumer-worker-{}", container_id);
-
-                        println!("Starting consumer worker({})...", container_name);
-
-                        let options = CreateContainerOptionsBuilder::default()
-                            .name(container_name.as_str())
-                            .build();
-
-                        docker.create_container(
-                            options.into(),
-                            config.clone(),
-                        ).await?;
-
-                        docker
-                            .start_container(container_name.as_str(), Some(StartContainerOptionsBuilder::default().build()))
-                            .await?;
-
-                        println!("Started consumer worker({}).", container_name);
-
+                    for _ in 0..to_spawn {
+                        let container_name = start_consumer(&docker, &config).await?;
                         running_worker_names.push(container_name);
                     }
                 } else if needed_consumer_workers_count < actual_consumer_workers_count {
-                    let consumer_workers_to_shut_down = 0.max(actual_consumer_workers_count - needed_consumer_workers_count);
+                    let to_stop = actual_consumer_workers_count - needed_consumer_workers_count;
 
-                    for _ in 0..consumer_workers_to_shut_down {
+                    for _ in 0..to_stop {
                         if let Some(container_name) = running_worker_names.pop() {
-                            println!("Shutting down consumer worker({})...", container_name);
-
-                            docker.stop_container(
-                                container_name.as_str(),
-                                Some(StopContainerOptionsBuilder::default().t(4).build()),
-                            ).await?;
-
-                            let response = docker.inspect_container(container_name.as_str(), None::<InspectContainerOptions>).await?;
-
-                            while let Some(s) = &response.state {
-                                if s.running == Some(false) {
-                                    break;
-                                } else {
-                                    time::sleep(Duration::from_millis(200)).await;
-                                }
-                            }
-
-                            docker.remove_container(
-                                container_name.as_str(),
-                                Some(
-                                    RemoveContainerOptionsBuilder::default()
-                                        .v(true)
-                                        .force(true)
-                                        .build()
-                                ),
-                            ).await?;
-
-                            println!("Shut down consumer worker({}).", container_name);
+                            stop_consumer(&docker, &container_name).await?;
                         }
                     }
                 } else {

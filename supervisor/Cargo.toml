@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bollard = "0.19.2"
-tokio = { version = "1.47.1", features = ["full"]}
-common = { path = "../common" }
-nanoid = "0.4.0"
+anyhow.workspace = true
+bollard.workspace = true
+tokio.workspace = true
+common.workspace = true
+nanoid.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

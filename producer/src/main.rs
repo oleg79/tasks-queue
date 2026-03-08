@@ -1,10 +1,12 @@
-use std::error::Error;
+use anyhow::Result;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::time::{interval, Duration, MissedTickBehavior};
 use common::{get_postgres_pool, create_task};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
     let mut signal_interrupt = signal(SignalKind::interrupt())?;
     let mut signal_terminate = signal(SignalKind::terminate())?;
 

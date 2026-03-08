@@ -1,23 +1,16 @@
+use anyhow::{Context, Result};
 use std::env;
-use std::error::Error;
 use fake::{Dummy, Fake, Faker};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::types::Json;
-
-pub use sqlx::types::uuid;
+pub use sqlx::types::uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Dummy)]
 pub struct QueueTaskPayload {
     pub quality: f32,
     pub length: u32,
     pub title: String,
-}
-
-#[derive(Debug, Dummy)]
-struct QueueTaskDTO {
-    topic: String,
-    payload: QueueTaskPayload,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::Type)]
@@ -31,7 +24,7 @@ pub enum QueueTaskStatus {
 
 #[derive(Debug, FromRow)]
 pub struct QueueTask {
-    pub id: uuid::Uuid,
+    pub id: Uuid,
     pub topic: String,
     pub payload: Json<QueueTaskPayload>,
     pub status: QueueTaskStatus,
@@ -39,21 +32,36 @@ pub struct QueueTask {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub async fn get_postgres_pool() -> Result<sqlx::PgPool, Box<dyn Error>> {
-    let user = env::var("POSTGRES_USER")?;
-    let pass = env::var("POSTGRES_PASSWORD")?;
-    let host = env::var("POSTGRES_HOST")?;
-    let port = env::var("POSTGRES_PORT")?;
-    let db = env::var("POSTGRES_DB")?;
+pub async fn get_postgres_pool() -> Result<sqlx::PgPool> {
+    let user = env::var("POSTGRES_USER").context("missing POSTGRES_USER")?;
+    let pass = env::var("POSTGRES_PASSWORD").context("missing POSTGRES_PASSWORD")?;
+    let host = env::var("POSTGRES_HOST").context("missing POSTGRES_HOST")?;
+    let port = env::var("POSTGRES_PORT").context("missing POSTGRES_PORT")?;
+    let db = env::var("POSTGRES_DB").context("missing POSTGRES_DB")?;
 
     let postgres_url = format!("postgres://{user}:{pass}@{host}:{port}/{db}");
 
-    let pool = sqlx::postgres::PgPool::connect(&postgres_url).await?;
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(
+            env::var("POSTGRES_MAX_CONNECTIONS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10),
+        )
+        .connect(&postgres_url)
+        .await
+        .context("Failed to connect to PostgreSQL")?;
 
     Ok(pool)
 }
 
-pub async fn create_task(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>> {
+pub async fn create_task(pool: &sqlx::PgPool) -> Result<()> {
+    #[derive(Debug, Dummy)]
+    struct QueueTaskDTO {
+        topic: String,
+        payload: QueueTaskPayload,
+    }
+
     let queue_task: QueueTaskDTO = Faker.fake();
 
     let created_task = sqlx::query_as::<_, QueueTask>("
@@ -65,12 +73,12 @@ pub async fn create_task(pool: &sqlx::PgPool) -> Result<(), Box<dyn Error>> {
         .fetch_one(pool)
         .await?;
 
-    println!("Task({}) created.", created_task.id);
+    tracing::info!(task_id = %created_task.id, "Task created");
 
     Ok(())
 }
 
-pub async fn read_tasks(pool: &sqlx::PgPool, limit: i32) -> Result<Vec<QueueTask>, Box<dyn Error>> {
+pub async fn read_tasks(pool: &sqlx::PgPool, limit: i32) -> Result<Vec<QueueTask>> {
     let query = sqlx::query_as::<_, QueueTask>("
         WITH pooled AS (
           UPDATE tasks t
@@ -93,8 +101,12 @@ pub async fn read_tasks(pool: &sqlx::PgPool, limit: i32) -> Result<Vec<QueueTask
     Ok(tasks)
 }
 
-pub async fn mark_tasks_as(pool: &sqlx::PgPool, ids: Vec<uuid::Uuid>, status: QueueTaskStatus) -> Result<(), Box<dyn Error>> {
-    println!("Tasks({:?}): {:#?}", status, ids);
+pub async fn mark_tasks_as(pool: &sqlx::PgPool, ids: Vec<Uuid>, status: QueueTaskStatus) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    tracing::info!(status = ?status, task_ids = ?ids, "Marking tasks");
 
     let query = sqlx::query("
             UPDATE tasks
@@ -111,7 +123,7 @@ pub async fn mark_tasks_as(pool: &sqlx::PgPool, ids: Vec<uuid::Uuid>, status: Qu
     Ok(())
 }
 
-pub async fn get_failed_task_ids(pool: &sqlx::PgPool) -> Result<Vec<uuid::Uuid>, Box<dyn Error>> {
+pub async fn get_failed_task_ids(pool: &sqlx::PgPool) -> Result<Vec<Uuid>> {
     let query = sqlx::query_scalar("
         SELECT t.id FROM tasks t
         WHERE t.status = 'failed'
@@ -122,7 +134,7 @@ pub async fn get_failed_task_ids(pool: &sqlx::PgPool) -> Result<Vec<uuid::Uuid>,
     Ok(ids)
 }
 
-pub async fn count_tasks_with_status(pool: &sqlx::PgPool, status: QueueTaskStatus) -> Result<i64, Box<dyn Error>> {
+pub async fn count_tasks_with_status(pool: &sqlx::PgPool, status: QueueTaskStatus) -> Result<i64> {
     let query = sqlx::query_scalar("
         SELECT COUNT(*) FROM tasks t
         WHERE t.status = $1
