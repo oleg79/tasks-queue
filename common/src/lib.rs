@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+pub mod error;
+pub use error::{Error, Result};
 use std::env;
 use fake::{Dummy, Fake, Faker};
 use serde::{Deserialize, Serialize};
@@ -33,11 +34,11 @@ pub struct QueueTask {
 }
 
 pub async fn get_postgres_pool() -> Result<sqlx::PgPool> {
-    let user = env::var("POSTGRES_USER").context("missing POSTGRES_USER")?;
-    let pass = env::var("POSTGRES_PASSWORD").context("missing POSTGRES_PASSWORD")?;
-    let host = env::var("POSTGRES_HOST").context("missing POSTGRES_HOST")?;
-    let port = env::var("POSTGRES_PORT").context("missing POSTGRES_PORT")?;
-    let db = env::var("POSTGRES_DB").context("missing POSTGRES_DB")?;
+    let user = env::var("POSTGRES_USER").map_err(|e| Error::EnvVar { name: "POSTGRES_USER", source: e })?;
+    let pass = env::var("POSTGRES_PASSWORD").map_err(|e| Error::EnvVar { name: "POSTGRES_PASSWORD", source: e })?;
+    let host = env::var("POSTGRES_HOST").map_err(|e| Error::EnvVar { name: "POSTGRES_HOST", source: e })?;
+    let port = env::var("POSTGRES_PORT").map_err(|e| Error::EnvVar { name: "POSTGRES_PORT", source: e })?;
+    let db = env::var("POSTGRES_DB").map_err(|e| Error::EnvVar { name: "POSTGRES_DB", source: e })?;
 
     let postgres_url = format!("postgres://{user}:{pass}@{host}:{port}/{db}");
 
@@ -49,8 +50,7 @@ pub async fn get_postgres_pool() -> Result<sqlx::PgPool> {
                 .unwrap_or(10),
         )
         .connect(&postgres_url)
-        .await
-        .context("Failed to connect to PostgreSQL")?;
+        .await?;
 
     Ok(pool)
 }
